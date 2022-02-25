@@ -1,7 +1,7 @@
 const express = require("express");
-const axios = require("axios");
 const fs = require("fs").promises;
 const uuid = require("uuid");
+const nuevoRoommate = require("./roommate");
 
 const app = express();
 
@@ -9,12 +9,7 @@ app.use(express.static("static"));
 
 app.post("/roommates", async (req, res) => {
   try {
-    let data = await axios.get("https://randomuser.me/api");
-    data = data.data.results;
-
-    const nombre = `${data[0].name.first} ${data[0].name.last}`;
-    const id = uuid.v4();
-
+    const { id, nombre } = await nuevoRoommate();
     const contenido = await fs.readFile("roommates.json", {
       encoding: "utf-8",
     });
@@ -24,38 +19,98 @@ app.post("/roommates", async (req, res) => {
     datos.roommates.push({ id, nombre, debe: 0, recibe: 0 });
 
     await fs.writeFile("roommates.json", JSON.stringify(datos), "utf-8");
-    res.json({ mensaje: "Rommie agregado" });
+    res.status(201).json({ mensaje: "Rommie agregado" });
   } catch (err) {
-    throw err;
+    res.status(500).send(err.message);
   }
 });
 
 app.get("/roommates", async (req, res) => {
-  const contenido = await fs.readFile("roommates.json", {
-    encoding: "utf-8",
-  });
+  try {
+    const contenido = await fs.readFile("roommates.json", {
+      encoding: "utf-8",
+    });
 
-  const datos = JSON.parse(contenido);
+    const datos = JSON.parse(contenido);
 
-  res.send(datos);
+    res.status(200).send(datos);
+  } catch (error) {
+    res.status(500).send(err.message);
+  }
 });
 
 app.get("/gastos", async (req, res) => {
-  const contenido = await fs.readFile("gastos.json", {
-    encoding: "utf-8",
-  });
+  try {
+    const contenido = await fs.readFile("gastos.json", {
+      encoding: "utf-8",
+    });
 
-  const datos = JSON.parse(contenido);
+    const datos = JSON.parse(contenido);
 
-  res.send(datos);
+    res.status(500).send(datos);
+  } catch (error) {
+    res.status(500).send(err.message);
+  }
 });
 
 app.post("/gastos", async (req, res) => {
-  let body;
-  req.on("data", (payload) => {
-    body = JSON.parse(payload);
-  });
-  req.on("end", async () => {
+  try {
+    let body;
+    req.on("data", (payload) => {
+      body = JSON.parse(payload);
+    });
+    req.on("end", async () => {
+      const contenidoGastos = await fs.readFile("gastos.json", {
+        encoding: "utf-8",
+      });
+      const historicoGastos = JSON.parse(contenidoGastos);
+
+      const contenidoRoommates = await fs.readFile("roommates.json", {
+        encoding: "utf-8",
+      });
+      let dataRoommates = JSON.parse(contenidoRoommates);
+
+      const id = uuid.v4();
+      const roommate = body.roommate;
+      const descripcion = body.descripcion;
+      const monto = body.monto;
+      historicoGastos.gastos.push({ id, roommate, descripcion, monto });
+
+      const encontrado = dataRoommates.roommates.findIndex(
+        (r) => r.nombre == roommate
+      );
+
+      if (encontrado == -1) {
+        await fs.writeFile(
+          "gastos.json",
+          JSON.stringify(historicoGastos),
+          "utf-8"
+        );
+        res.status(404).send("Roommate no encontrado");
+      } else {
+        dataRoommates.roommates[encontrado].debe =
+          dataRoommates.roommates[encontrado].debe + monto;
+
+        await fs.writeFile(
+          "roommates.json",
+          JSON.stringify(dataRoommates),
+          "utf-8"
+        );
+        res.status(201).json({ mensaje: "Gasto agregado" });
+        await fs.writeFile(
+          "gastos.json",
+          JSON.stringify(historicoGastos),
+          "utf-8"
+        );
+      }
+    });
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+app.delete("/gastos", async (req, res) => {
+  try {
     const contenidoGastos = await fs.readFile("gastos.json", {
       encoding: "utf-8",
     });
@@ -66,125 +121,84 @@ app.post("/gastos", async (req, res) => {
     });
     let dataRoommates = JSON.parse(contenidoRoommates);
 
-    const id = uuid.v4();
-    const roommate = body.roommate;
-    const descripcion = body.descripcion;
-    const monto = body.monto;
-    historicoGastos.gastos.push({ id, roommate, descripcion, monto });
+    const idGasto = req.query.id;
 
-    const encontrado = dataRoommates.roommates.findIndex(
-      (r) => r.nombre == roommate
+    const encontrado = historicoGastos.gastos.findIndex((g) => g.id == idGasto);
+    const encontradoRoommie = dataRoommates.roommates.findIndex(
+      (r) => r.nombre == historicoGastos.gastos[encontrado].roommate
     );
 
     if (encontrado == -1) {
-      await fs.writeFile(
-        "gastos.json",
-        JSON.stringify(historicoGastos),
-        "utf-8"
-      );
-      res.send({ todo: "OK" });
+      res.status(404).send("Gasto no encontrado");
     } else {
-      dataRoommates.roommates[encontrado].debe =
-        dataRoommates.roommates[encontrado].debe + monto;
+      dataRoommates.roommates[encontradoRoommie].debe =
+        dataRoommates.roommates[encontradoRoommie].debe -
+        historicoGastos.gastos[encontrado].monto;
+
+      historicoGastos.gastos.splice(encontrado, 1);
 
       await fs.writeFile(
         "roommates.json",
         JSON.stringify(dataRoommates),
         "utf-8"
       );
-      res.json({ mensaje: "Gasto agregado" });
+      res.status(204).json({ mensaje: "Gasto eliminado" });
       await fs.writeFile(
         "gastos.json",
         JSON.stringify(historicoGastos),
         "utf-8"
       );
     }
-  });
-});
-
-app.delete("/gastos", async (req, res) => {
-  const contenidoGastos = await fs.readFile("gastos.json", {
-    encoding: "utf-8",
-  });
-  const historicoGastos = JSON.parse(contenidoGastos);
-
-  const contenidoRoommates = await fs.readFile("roommates.json", {
-    encoding: "utf-8",
-  });
-  let dataRoommates = JSON.parse(contenidoRoommates);
-
-  const idGasto = req.query.id;
-
-  const encontrado = historicoGastos.gastos.findIndex((g) => g.id == idGasto);
-  const encontradoRoommie = dataRoommates.roommates.findIndex(
-    (r) => r.nombre == historicoGastos.gastos[encontrado].roommate
-  );
-
-  if (encontrado == -1) {
-    res.send("Gasto no encontrado");
-  } else {
-    dataRoommates.roommates[encontradoRoommie].debe =
-      dataRoommates.roommates[encontradoRoommie].debe -
-      historicoGastos.gastos[encontrado].monto;
-
-    historicoGastos.gastos.splice(encontrado, 1);
-
-    await fs.writeFile(
-      "roommates.json",
-      JSON.stringify(dataRoommates),
-      "utf-8"
-    );
-    res.json({ mensaje: "Gasto eliminado" });
-    await fs.writeFile("gastos.json", JSON.stringify(historicoGastos), "utf-8");
+  } catch (err) {
+    res.status(500).send(err.message);
   }
 });
 
 app.put("/gastos", async (req, res) => {
-  let body;
-  req.on("data", (payload) => {
-    body = JSON.parse(payload);
-  });
-  req.on("end", async () => {
-    const contenidoGastos = await fs.readFile("gastos.json", {
-      encoding: "utf-8",
+  try {
+    let body;
+    req.on("data", (payload) => {
+      body = JSON.parse(payload);
     });
-    const historicoGastos = JSON.parse(contenidoGastos);
+    req.on("end", async () => {
+      const contenidoGastos = await fs.readFile("gastos.json", {
+        encoding: "utf-8",
+      });
+      const historicoGastos = JSON.parse(contenidoGastos);
 
-    const contenidoRoommates = await fs.readFile("roommates.json", {
-      encoding: "utf-8",
-    });
-    let dataRoommates = JSON.parse(contenidoRoommates);
+      const contenidoRoommates = await fs.readFile("roommates.json", {
+        encoding: "utf-8",
+      });
+      let dataRoommates = JSON.parse(contenidoRoommates);
 
-    const roommate = body.roommate;
-    const descripcion = body.descripcion;
-    const monto = body.monto;
+      const roommate = body.roommate;
+      const descripcion = body.descripcion;
+      const monto = body.monto;
+      const id = req.query.id;
 
-    const encontrado = historicoGastos.gastos.findIndex(
-      (g) => g.roommate == roommate
-    );
+      const encontrado = historicoGastos.gastos.findIndex((g) => g.id == id);
 
-    //   const idGasto = historicoGastos.gastos[encontrado].id;
+      //   const idGasto = historicoGastos.gastos[encontrado].id;
 
-    const encontradoRoommie = dataRoommates.roommates.findIndex(
-      (r) => r.nombre == historicoGastos.gastos[encontrado].roommate
-    );
+      let encontradoRoommie = dataRoommates.roommates.findIndex(
+        (r) => r.nombre == historicoGastos.gastos[encontrado].roommate
+      );
 
-    dataRoommates.roommates[encontradoRoommie].debe =
-      dataRoommates.roommates[encontradoRoommie].debe -
-      historicoGastos.gastos[encontrado].monto;
+      dataRoommates.roommates[encontradoRoommie].debe =
+        dataRoommates.roommates[encontradoRoommie].debe -
+        historicoGastos.gastos[encontrado].monto;
 
-    if (encontrado == -1) {
-      res.send("Gasto no encontrado");
-    }
+      if (encontrado == -1) {
+        res.status(404).send("Gasto no encontrado");
+      }
 
-    if (
-      historicoGastos.gastos[encontrado].descripcion != descripcion ||
-      historicoGastos.gastos[encontrado].roommate != roommate ||
-      historicoGastos.gastos[encontrado].monto != monto
-    ) {
       historicoGastos.gastos[encontrado].descripcion = descripcion;
       historicoGastos.gastos[encontrado].monto = monto;
       historicoGastos.gastos[encontrado].roommate = roommate;
+
+      encontradoRoommie = dataRoommates.roommates.findIndex(
+        (r) => r.nombre == roommate
+      );
 
       dataRoommates.roommates[encontradoRoommie].debe =
         dataRoommates.roommates[encontradoRoommie].debe +
@@ -195,14 +209,16 @@ app.put("/gastos", async (req, res) => {
         JSON.stringify(dataRoommates),
         "utf-8"
       );
-      res.json({ mensaje: "Gasto editado" });
+      res.status(200).json({ mensaje: "Gasto editado" });
       await fs.writeFile(
         "gastos.json",
         JSON.stringify(historicoGastos),
         "utf-8"
       );
-    }
-  });
+    });
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
 });
 
 app.listen(3000, () => {
